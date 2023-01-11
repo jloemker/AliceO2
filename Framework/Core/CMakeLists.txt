@@ -98,6 +98,7 @@ o2_add_library(Framework
                        src/SimpleOptionsRetriever.cxx
                        src/O2ControlHelpers.cxx
                        src/O2ControlLabels.cxx
+                       src/O2DataModelHelpers.cxx
                        src/OutputSpec.cxx
                        src/OptionsHelpers.cxx
                        src/PropertyTreeHelpers.cxx
@@ -218,6 +219,7 @@ foreach(t
         Mermaid
         OptionsHelpers
         OverrideLabels
+        O2DataModelHelpers
         PtrHelpers
         RootConfigParamHelpers
         Services
@@ -244,6 +246,12 @@ foreach(t
               LABELS framework
               PUBLIC_LINK_LIBRARIES O2::Framework)
 endforeach()
+
+o2_add_test(O2DatabasePDG NAME test_Framework_test_O2DatabasePDG
+            SOURCES test/test_O2DatabasePDG.cxx
+            COMPONENT_NAME Framework
+            LABELS framework
+            PUBLIC_LINK_LIBRARIES O2::Framework O2::FrameworkPhysicsSupport)
 
 o2_add_test(Root2ArrowTable NAME test_Framework_test_Root2ArrowTable
             SOURCES test/test_Root2ArrowTable.cxx

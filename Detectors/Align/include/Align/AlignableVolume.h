@@ -29,7 +29,6 @@
 #include <TGeoMatrix.h>
 #include <cstdio>
 #include "DetectorsCommonDataFormats/AlignParam.h"
-#include "Align/DOFStatistics.h"
 #include "Align/DOFSet.h"
 #include <vector>
 
@@ -112,7 +111,7 @@ class AlignableVolume : public DOFSet
   {
     mDOFAsMeas = pat;
   }
-
+  bool isNameMatching(const std::string& regexStr) const;
   bool isFreeDOF(int dof) const { return (mDOF & (0x1 << dof)) != 0; }
   bool isMeasuredDOF(int dof) const { return isFreeDOF(dof) && ((mDOFAsMeas & (0x1 << dof)) != 0); }
   bool isCondDOF(int dof) const;
@@ -145,8 +144,7 @@ class AlignableVolume : public DOFSet
   double getAlpTracking() const { return mAlp; }
   //
   int getNProcessedPoints() const { return mNProcPoints; }
-  virtual int finalizeStat(DOFStatistics& h);
-  void fillDOFStat(DOFStatistics& h) const;
+  virtual int finalizeStat();
   //
   int getNDOFGeomFree() const { return mNDOFGeomFree; }
   //
@@ -207,6 +205,7 @@ class AlignableVolume : public DOFSet
   virtual const char* getDOFName(int i) const;
   void Print(const Option_t* opt = "") const override;
   virtual void writePedeInfo(FILE* parOut, const Option_t* opt = "") const;
+  virtual void writeLabeledPedeResults(FILE* parOut) const;
   //
   static const char* getGeomDOFName(int i) { return i < kNDOFGeom ? sDOFName[i] : nullptr; }
   static void setDefGeomFree(uint8_t patt) { sDefGeomFree = patt; }

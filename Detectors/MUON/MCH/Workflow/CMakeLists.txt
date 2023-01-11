@@ -14,6 +14,7 @@
 o2_add_library(MCHWorkflow
                SOURCES
                    src/ClusterFinderOriginalSpec.cxx
+                   src/ClusterFinderGEMSpec.cxx
                    src/ClusterReaderSpec.cxx
                    src/ClusterWriterSpec.cxx
                    src/DataDecoderSpec.cxx
@@ -28,6 +29,7 @@ o2_add_library(MCHWorkflow
                    O2::DetectorsRaw
                    O2::MCHCTF
                    O2::MCHClustering
+                   O2::MCHClusteringGEM
                    O2::MCHPreClustering
                    O2::MCHRawCommon
                    O2::MCHRawDecoder
@@ -135,13 +137,13 @@ o2_add_executable(
         clusters-to-tracks-original-workflow
         SOURCES src/TrackFinderOriginalSpec.cxx src/clusters-to-tracks-original-workflow.cxx
         COMPONENT_NAME mch
-        PUBLIC_LINK_LIBRARIES O2::Framework O2::DataFormatsMCH O2::MCHTracking)
+        PUBLIC_LINK_LIBRARIES O2::Framework O2::DetectorsBase O2::DataFormatsMCH O2::MCHTracking O2::DataFormatsParameters)
 
 o2_add_executable(
         clusters-to-tracks-workflow
         SOURCES src/TrackFinderSpec.cxx src/clusters-to-tracks-workflow.cxx
         COMPONENT_NAME mch
-        PUBLIC_LINK_LIBRARIES O2::DataFormatsParameters O2::Framework O2::DataFormatsMCH O2::MCHTracking O2::DataFormatsParameters)
+        PUBLIC_LINK_LIBRARIES O2::Framework O2::DetectorsBase O2::DataFormatsMCH O2::MCHTracking O2::DataFormatsParameters)
 
 o2_add_executable(
         vertex-sampler-workflow
