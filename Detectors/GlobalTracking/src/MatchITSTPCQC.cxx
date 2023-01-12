@@ -311,7 +311,7 @@ void MatchITSTPCQC::run(o2::framework::ProcessingContext& ctx)
     if (isTPCTrackSelectedEntry[idxTrkTpc] == true) {
       if (!mUseMC) {
         mPt->Fill(trkTpc.getPt());
-        mPhi->Fill(trkTpc.getPhi());      
+        mPhi->Fill(trkTpc.getPhi());
         mPhiVsPt->Fill(trkTpc.getPt(), trkTpc.getPhi());
         mEta->Fill(trkTpc.getEta());
         mEtaVsPt->FIll(trkTpc.getPt(), trkTpc.getEta());
