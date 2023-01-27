@@ -41,12 +41,9 @@ constexpr double TrackFinder::SChamberThicknessInX0[10];
 constexpr int TrackFinder::SNDE[10];
 
 //_________________________________________________________________________________________________
-void TrackFinder::init(float l3Current, float dipoleCurrent)
+void TrackFinder::init()
 {
   /// Prepare to run the algorithm
-
-  // create the magnetic field map if not already done
-  mTrackFitter.initField(l3Current, dipoleCurrent);
 
   // Set the parameters used for fitting the tracks during the tracking
   const auto& trackerParam = TrackerParam::Instance();
@@ -138,6 +135,24 @@ void TrackFinder::init(float l3Current, float dipoleCurrent)
     mClusters[8 + 4 * (iCh - 4) + 3].emplace_back(100 * (iCh + 1) + 17, nullptr);
     mClusters[8 + 4 * (iCh - 4) + 3].emplace_back(100 * (iCh + 1) + 19, nullptr);
   }
+}
+
+//_________________________________________________________________________________________________
+void TrackFinder::initField(float l3Current, float dipoleCurrent)
+{
+  /// create the magnetic field map if not already done
+  mTrackFitter.initField(l3Current, dipoleCurrent);
+}
+
+//_________________________________________________________________________________________________
+const std::list<Track>& TrackFinder::findTracks(gsl::span<const Cluster> clusters)
+{
+  /// Group the clusters per DE and run the track finder algorithm
+  std::unordered_map<int, std::list<const Cluster*>> clustersPerDE{};
+  for (const auto& cluster : clusters) {
+    clustersPerDE[cluster.getDEId()].emplace_back(&cluster);
+  }
+  return findTracks(clustersPerDE);
 }
 
 //_________________________________________________________________________________________________

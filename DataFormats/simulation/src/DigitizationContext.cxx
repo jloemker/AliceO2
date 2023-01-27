@@ -11,12 +11,14 @@
 
 #include "SimulationDataFormat/DigitizationContext.h"
 #include "SimulationDataFormat/MCEventHeader.h"
+#include "SimulationDataFormat/InteractionSampler.h"
 #include "DetectorsCommonDataFormats/DetectorNameConf.h"
 #include <TChain.h>
 #include <TFile.h>
 #include <iostream>
 #include <numeric> // for iota
 #include <MathUtils/Cartesian.h>
+#include <DataFormatsCalibration/MeanVertexObject.h>
 
 using namespace o2::steer;
 
@@ -28,6 +30,7 @@ void DigitizationContext::printCollisionSummary(bool withQED, int truncateOutput
   for (int p = 0; p < mSimPrefixes.size(); ++p) {
     std::cout << "Part " << p << " : " << mSimPrefixes[p] << "\n";
   }
+  std::cout << "QED information included " << isQEDProvided() << "\n";
   if (withQED) {
     std::cout << "Number of Collisions " << mEventRecords.size() << "\n";
     std::cout << "Number of QED events " << mEventRecordsWithQED.size() - mEventRecords.size() << "\n";
@@ -53,6 +56,9 @@ void DigitizationContext::printCollisionSummary(bool withQED, int truncateOutput
       std::cout << "Collision " << i << " TIME " << mEventRecords[i];
       for (auto& e : mEventParts[i]) {
         std::cout << " (" << e.sourceID << " , " << e.entryID << ")";
+      }
+      if (i < mInteractionVertices.size()) {
+        std::cout << " sampled vertex : " << mInteractionVertices[i];
       }
       std::cout << "\n";
     }
@@ -196,7 +202,7 @@ void DigitizationContext::saveToFile(std::string_view filename) const
   file.Close();
 }
 
-DigitizationContext const* DigitizationContext::loadFromFile(std::string_view filename)
+DigitizationContext* DigitizationContext::loadFromFile(std::string_view filename)
 {
   std::string tmpFile;
   if (filename == "") {
@@ -209,22 +215,54 @@ DigitizationContext const* DigitizationContext::loadFromFile(std::string_view fi
   return incontext;
 }
 
-void DigitizationContext::fillQED(std::string_view QEDprefix, std::vector<o2::InteractionTimeRecord> const& irecord)
+void DigitizationContext::fillQED(std::string_view QEDprefix, int max_events, double qedrate)
+{
+  o2::steer::InteractionSampler qedInteractionSampler;
+  qedInteractionSampler.setBunchFilling(mBCFilling);
+
+  // get first and last "hadronic" interaction records and let
+  // QED events range from the first bunch crossing to the last bunch crossing
+  // in this range
+  auto first = mEventRecords.front();
+  auto last = mEventRecords.back();
+  first.bc = 0;
+  last.bc = o2::constants::lhc::LHCMaxBunches;
+  LOG(info) << "QED RATE " << qedrate;
+  qedInteractionSampler.setInteractionRate(qedrate);
+  qedInteractionSampler.setFirstIR(first);
+  qedInteractionSampler.init();
+  qedInteractionSampler.print();
+  std::vector<o2::InteractionTimeRecord> qedinteractionrecords;
+  o2::InteractionTimeRecord t;
+  LOG(info) << "GENERATING COL TIMES";
+  t = qedInteractionSampler.generateCollisionTime();
+  while ((t = qedInteractionSampler.generateCollisionTime()) < last) {
+    qedinteractionrecords.push_back(t);
+  }
+  LOG(info) << "DONE GENERATING COL TIMES";
+  fillQED(QEDprefix, qedinteractionrecords, max_events, false);
+}
+
+void DigitizationContext::fillQED(std::string_view QEDprefix, std::vector<o2::InteractionTimeRecord> const& irecord, int max_events, bool fromKinematics)
 {
   mQEDSimPrefix = QEDprefix;
 
   std::vector<std::vector<o2::steer::EventPart>> qedEventParts;
 
-  // we need to fill the QED parts (using a simple round robin scheme)
-  auto qedKinematicsName = o2::base::NameConf::getMCKinematicsFileName(mQEDSimPrefix);
-  // find out how many events are stored
-  TFile f(qedKinematicsName.c_str(), "OPEN");
-  auto t = (TTree*)f.Get("o2sim");
-  if (!t) {
-    LOG(error) << "No QED kinematics found";
-    throw std::runtime_error("No QED kinematics found");
+  int numberQEDevents = max_events; // if this is -1 there will be no limitation
+  if (fromKinematics) {
+    // we need to fill the QED parts (using a simple round robin scheme)
+    auto qedKinematicsName = o2::base::NameConf::getMCKinematicsFileName(mQEDSimPrefix);
+    // find out how many events are stored
+    TFile f(qedKinematicsName.c_str(), "OPEN");
+    auto t = (TTree*)f.Get("o2sim");
+    if (!t) {
+      LOG(error) << "No QED kinematics found";
+      throw std::runtime_error("No QED kinematics found");
+    }
+    numberQEDevents = t->GetEntries();
   }
-  auto numberQEDevents = t->GetEntries();
+
   int eventID = 0;
   for (auto& tmp : irecord) {
     std::vector<EventPart> qedpart;
@@ -385,4 +423,63 @@ int DigitizationContext::findSimPrefix(std::string const& prefix) const
     return std::distance(mSimPrefixes.begin(), iter);
   }
   return -1;
+}
+
+namespace
+{
+struct pair_hash {
+  template <class T1, class T2>
+  std::size_t operator()(const std::pair<T1, T2>& pair) const
+  {
+    return std::hash<T1>()(pair.first) ^ std::hash<T2>()(pair.second);
+  }
+};
+} // namespace
+
+void DigitizationContext::sampleInteractionVertices(o2::dataformats::MeanVertexObject const& meanv)
+{
+  // mapping of source x event --> index into mInteractionVertices
+  std::unordered_map<std::pair<int, int>, int, pair_hash> vertex_cache;
+
+  mInteractionVertices.clear();
+  int collcount = 0;
+
+  std::unordered_set<int> vset; // used to detect vertex incompatibilities
+  for (auto& coll : mEventParts) {
+    collcount++;
+    vset.clear();
+
+    // first detect if any of these entries already has an associated vertex
+    for (auto& part : coll) {
+      auto source = part.sourceID;
+      auto event = part.entryID;
+      auto cached_iter = vertex_cache.find(std::pair<int, int>(source, event));
+
+      if (cached_iter != vertex_cache.end()) {
+        vset.emplace(cached_iter->second);
+      }
+    }
+
+    // make sure that there is no conflict
+    if (vset.size() > 1) {
+      LOG(fatal) << "Impossible conflict during interaction vertex sampling";
+    }
+
+    int cacheindex = -1;
+    if (vset.size() == 1) {
+      // all of the parts need to be assigned the same existing vertex
+      cacheindex = *(vset.begin());
+      mInteractionVertices.push_back(mInteractionVertices[cacheindex]);
+    } else {
+      // we need to sample a new point
+      mInteractionVertices.emplace_back(meanv.sample());
+      cacheindex = mInteractionVertices.size() - 1;
+    }
+    // update the cache
+    for (auto& part : coll) {
+      auto source = part.sourceID;
+      auto event = part.entryID;
+      vertex_cache[std::pair<int, int>(source, event)] = cacheindex;
+    }
+  }
 }

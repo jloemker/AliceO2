@@ -27,6 +27,8 @@
 #include "DataFormatsTPC/VDriftCorrFact.h"
 #include <fairlogger/Logger.h>
 #include <set>
+#include <algorithm>
+#include <random>
 
 using namespace o2::tpc;
 using GTrackID = o2::dataformats::GlobalTrackID;
@@ -55,7 +57,7 @@ void TrackInterpolation::init()
   LOG(info) << "Done initializing TrackInterpolation";
 }
 
-void TrackInterpolation::process(const o2::globaltracking::RecoContainer& inp, const std::vector<GTrackID>& gids, const std::vector<o2::globaltracking::RecoContainer::GlobalIDSet>& gidTables, std::vector<o2::track::TrackParCov>& seeds, const std::vector<float>& trkTimes)
+void TrackInterpolation::process(const o2::globaltracking::RecoContainer& inp, const std::vector<GTrackID>& gids, const std::vector<o2::globaltracking::RecoContainer::GlobalIDSet>& gidTables, std::vector<o2::track::TrackParCov>& seeds, const std::vector<float>& trkTimes, const std::unordered_map<int, int>& trkCounters)
 {
   // main processing function
 
@@ -80,16 +82,61 @@ void TrackInterpolation::process(const o2::globaltracking::RecoContainer& inp, c
   mTrackData.reserve(nSeeds);
   mClRes.reserve(nSeeds * param::NPadRows);
 
-  for (int iSeed = 0; iSeed < nSeeds; ++iSeed) {
-    if (gids[iSeed].includesDet(DetID::TRD) || gids[iSeed].includesDet(DetID::TOF)) {
-      interpolateTrack(iSeed);
-    } else {
-      extrapolateTrack(iSeed);
-    }
+  // to obtain ITS-TPC-TRD-TOF track from ITS-TPC-TRD track we fill the trkMap
+  std::unordered_map<GTrackID, int> trkMap;
+  for (int iTrk = 0; iTrk < trkCounters.at(GTrackID::Source::ITSTPCTRDTOF); ++iTrk) {
+    const auto& gidTable = (*mGIDtables)[iTrk];
+    trkMap.emplace(std::make_pair(gidTable[GTrackID::ITSTPCTRD], iTrk));
+  }
+
+  // In case we have more input tracks available than are required per TF
+  // we want to sample them. But we still prefer global ITS-TPC-TRD-TOF tracks
+  // over ITS-TPC-TRD tracks and so on. So we have to shuffle the indices
+  // in blocks.
+  // The input GIDs are sorted. ITS-TPC-TRD-TOF are first followed by ITS-TPC-TRD,
+  // ITS-TPC-TOF and ITS-TPC
+  std::random_device rd;
+  std::mt19937 g(rd());
+  std::vector<int> trackIndices(nSeeds);
+  std::iota(trackIndices.begin(), trackIndices.end(), 0);
+
+  std::shuffle(trackIndices.begin(), trackIndices.begin() + trkCounters.at(GTrackID::Source::ITSTPCTRDTOF), g);
+  int nTracks = trkCounters.at(GTrackID::Source::ITSTPCTRDTOF);
+  std::shuffle(trackIndices.begin() + nTracks, trackIndices.begin() + nTracks + trkCounters.at(GTrackID::Source::ITSTPCTRD), g);
+  nTracks += trkCounters.at(GTrackID::Source::ITSTPCTRD);
+  std::shuffle(trackIndices.begin() + nTracks, trackIndices.begin() + nTracks + trkCounters.at(GTrackID::Source::ITSTPCTOF), g);
+  nTracks += trkCounters.at(GTrackID::Source::ITSTPCTOF);
+  std::shuffle(trackIndices.begin() + nTracks, trackIndices.begin() + nTracks + trkCounters.at(GTrackID::Source::ITSTPC), g);
+
+  std::vector<int> globalTracksToCheck;
+  for (int iSeed = trkCounters.at(GTrackID::Source::ITSTPCTRDTOF); iSeed < nSeeds; ++iSeed) {
     if (mMaxTracksPerTF >= 0 && mTrackDataCompact.size() >= mMaxTracksPerTF) {
       LOG(info) << "Maximum number of tracks per TF reached. Skipping the remaining " << nSeeds - iSeed << " tracks.";
       break;
     }
+    if (auto search = trkMap.find((*mGIDs)[iSeed]); search != trkMap.end()) {
+      // for this ITS-TPC-TRD track we also have a match in TOF
+      if (mParams->debugTRDTOF) {
+        // process the ITS-TPC-TRD-TOF track later, in addition to the ITS-TPC-TRD track
+        globalTracksToCheck.push_back(search->second);
+      } else {
+        interpolateTrack(search->second);
+        continue;
+      }
+    }
+    if (gids[trackIndices[iSeed]].includesDet(DetID::TRD) || gids[trackIndices[iSeed]].includesDet(DetID::TOF)) {
+      interpolateTrack(trackIndices[iSeed]);
+    } else {
+      extrapolateTrack(trackIndices[iSeed]);
+    }
+  }
+  // irrespective of the number of tracks already processed, interpolate the ITS-TPC-TRD-TOF tracks
+  // which belong to the ITS-TPC-TRD tracks that were already processed, to allow their analysis
+  // offline
+  // the globalTracksToCheck vector is only filled in case mParams->debugTRDTOF == true
+  LOGP(info, "Processing {} ITS-TPC-TRD-TOF tracks for which the ITS-TPC-TRD track was already done", globalTracksToCheck.size());
+  for (auto iTrk : globalTracksToCheck) {
+    interpolateTrack(iTrk);
   }
 
   LOG(info) << "Could process " << mTrackData.size() << " tracks successfully";
@@ -264,11 +311,7 @@ void TrackInterpolation::interpolateTrack(int iSeed)
   }
 
   trackData.gid = (*mGIDs)[iSeed];
-  trackData.x = (*mSeeds)[iSeed].getX();
-  trackData.alpha = (*mSeeds)[iSeed].getAlpha();
-  for (int i = 0; i < o2::track::kNParams; ++i) {
-    trackData.p[i] = (*mSeeds)[iSeed].getParam(i);
-  }
+  trackData.par = (*mSeeds)[iSeed];
   trackData.chi2TRD = gidTable[GTrackID::TRD].isIndexSet() ? mRecoCont->getITSTPCTRDTrack<o2::trd::TrackTRD>(gidTable[GTrackID::ITSTPCTRD]).getChi2() : 0;
   trackData.chi2TPC = trkTPC.getChi2();
   trackData.chi2ITS = trkITS.getChi2();
@@ -277,16 +320,8 @@ void TrackInterpolation::interpolateTrack(int iSeed)
   trackData.nTrkltsTRD = gidTable[GTrackID::TRD].isIndexSet() ? mRecoCont->getITSTPCTRDTrack<o2::trd::TrackTRD>(gidTable[GTrackID::ITSTPCTRD]).getNtracklets() : 0;
   trackData.clAvailTOF = gidTable[GTrackID::TOF].isIndexSet() ? 1 : 0;
 
-  /*
-  // FIXME
-
-  Calculate number of tracks required per TF based on calibration slot length
-  In case too many tracks available, use std::sample algorithm to take random sample of input tracks
-  (make sure to use first most global tracks, then ITS-TPC-TRD, then ITS-TPC-TOF)
-  */
-
   TrackParams params; // for refitted track parameters and flagging rejected clusters
-  if (validateTrack(trackData, params, clusterResiduals)) {
+  if (mParams->skipOutlierFiltering || validateTrack(trackData, params, clusterResiduals)) {
     // track is good
     int nClValidated = 0;
     int iRow = 0;
@@ -342,7 +377,7 @@ void TrackInterpolation::extrapolateTrack(int iSeed)
     }
     TPCClusterResiduals res;
     res.setDY(y - trkWork.getY());
-    res.setDY(z - trkWork.getZ());
+    res.setDZ(z - trkWork.getZ());
     res.setY(trkWork.getY());
     res.setZ(trkWork.getZ());
     res.setSnp(trkWork.getSnp());
@@ -353,11 +388,7 @@ void TrackInterpolation::extrapolateTrack(int iSeed)
     ++nMeasurements;
   }
   trackData.gid = (*mGIDs)[iSeed];
-  trackData.x = (*mSeeds)[iSeed].getX();
-  trackData.alpha = (*mSeeds)[iSeed].getAlpha();
-  for (int i = 0; i < o2::track::kNParams; ++i) {
-    trackData.p[i] = (*mSeeds)[iSeed].getParam(i);
-  }
+  trackData.par = (*mSeeds)[iSeed];
   trackData.chi2TPC = trkTPC.getChi2();
   trackData.chi2ITS = trkITS.getChi2();
   trackData.nClsTPC = trkTPC.getNClusterReferences();
@@ -365,7 +396,7 @@ void TrackInterpolation::extrapolateTrack(int iSeed)
   trackData.clIdx.setEntries(nMeasurements);
 
   TrackParams params; // for refitted track parameters and flagging rejected clusters
-  if (validateTrack(trackData, params, clusterResiduals)) {
+  if (mParams->skipOutlierFiltering || validateTrack(trackData, params, clusterResiduals)) {
     // track is good
     int nClValidated = 0;
     int iRow = 0;
@@ -406,7 +437,7 @@ bool TrackInterpolation::validateTrack(const TrackData& trk, TrackParams& params
     LOG(debug) << "Skipping track too far from helix approximation";
     return false;
   }
-  if (fabsf(params.qpt) > mParams->maxQ2Pt) {
+  if (fabsf(mBz) > 0.01 && fabsf(params.qpt) > mParams->maxQ2Pt) {
     LOG(debug) << "Skipping track with too high q/pT: " << params.qpt;
     return false;
   }
@@ -425,7 +456,7 @@ bool TrackInterpolation::compareToHelix(const TrackData& trk, TrackParams& param
   std::array<float, param::NPadRows> yLab;
   std::array<float, param::NPadRows> sPath;
 
-  float curvature = fabsf(trk.p[o2::track::ParLabels::kQ2Pt] * mBz * o2::constants::physics::LightSpeedCm2S * 1e-14f);
+  float curvature = fabsf(trk.par.getQ2Pt() * mBz * o2::constants::physics::LightSpeedCm2S * 1e-14f);
   int secFirst = clsRes[0].sec;
   float phiSect = (secFirst + .5f) * o2::constants::math::SectorSpanRad;
   float snPhi = sin(phiSect);
@@ -468,6 +499,10 @@ bool TrackInterpolation::compareToHelix(const TrackData& trk, TrackParams& param
       }
       sPath[iP] = sPath[iP - 1] + ds;
     }
+  }
+  if (fabsf(mBz) < 0.01) {
+    // for B=0 we don't need to try a circular fit...
+    return true;
   }
   float xcSec = 0.f;
   float ycSec = 0.f;
@@ -565,7 +600,7 @@ bool TrackInterpolation::outlierFiltering(const TrackData& trk, TrackParams& par
   }
   float rmsLong = checkResiduals(trk, params, clsRes);
   if (static_cast<float>(params.flagRej.count()) / clsRes.size() > mParams->maxRejFrac) {
-    LOG(debug) << "Skipping track with too many clusters rejected: " << static_cast<float>(params.flagRej.count()) / clsRes.size();
+    LOGP(debug, "Skipping track with too many clusters rejected: {} out of {}", params.flagRej.count(), clsRes.size());
     return false;
   }
   if (rmsLong > mParams->maxRMSLong) {
@@ -618,6 +653,7 @@ float TrackInterpolation::checkResiduals(const TrackData& trk, TrackParams& para
   }
   if (nAccY < mParams->minNumberOfAcceptedResiduals || nAccZ < mParams->minNumberOfAcceptedResiduals) {
     // mask all clusters
+    LOGP(debug, "Accepted {} clusters for dY {} clusters for dZ, but required at least {} for both", nAccY, nAccZ, mParams->minNumberOfAcceptedResiduals);
     params.flagRej.set();
     return 0.f;
   }

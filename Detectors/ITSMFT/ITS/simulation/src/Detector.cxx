@@ -126,7 +126,7 @@ void Detector::configOuterBarrelITS(int nInnerBarrelLayers)
   }
 }
 
-Detector::Detector(Bool_t active, TString name)
+Detector::Detector(Bool_t active, TString name, TString its3Version)
   : o2::base::DetImpl<Detector>(name, active),
     mTrackData(),
     /*
@@ -145,7 +145,10 @@ Detector::Detector(Bool_t active, TString name)
     mDescriptorIB.reset(new DescriptorInnerBarrelITS2(3));
   } else if (name == "IT3") {
 #ifdef ENABLE_UPGRADES
-    mDescriptorIB.reset(new DescriptorInnerBarrelITS3(DescriptorInnerBarrelITS3::ThreeLayersNoDeadZones));
+    mDescriptorIB.reset(new DescriptorInnerBarrelITS3());
+    if (its3Version != "") {
+      ((DescriptorInnerBarrelITS3*)mDescriptorIB.get())->setVersion(its3Version.Data());
+    }
 #endif
   } else {
     LOG(fatal) << "Detector name not supported (options ITS and ITS3)";
@@ -200,10 +203,10 @@ Detector::Detector(Bool_t active, TString name)
   }
 
   if (detName == "ITS") {
-    dynamic_cast<DescriptorInnerBarrelITS2*>(mDescriptorIB.get())->configure();
+    ((DescriptorInnerBarrelITS2*)mDescriptorIB.get())->configure();
   } else if (detName == "IT3") {
 #ifdef ENABLE_UPGRADES
-    dynamic_cast<DescriptorInnerBarrelITS3*>(mDescriptorIB.get())->configure();
+    ((DescriptorInnerBarrelITS3*)mDescriptorIB.get())->configure();
 #endif
   }
   configOuterBarrelITS(mNumberInnerLayers);
@@ -619,6 +622,20 @@ void Detector::createMaterials()
   // Titanium
   o2::base::Detector::Material(35, "TITANIUM$", 47.867, 22, 4.506, 999, 999);
   o2::base::Detector::Medium(35, "TITANIUM$", 35, 0, ifield, fieldm, tmaxfdSi, stemaxSi, deemaxSi, epsilSi, stminSi);
+
+  // For ITS3
+
+  // Araldite 2011
+  Float_t dAraldite = 1.05;
+
+  // ERG Duocel
+  o2::base::Detector::Material(39, "ERGDUOCEL$", 12.0107, 6, 0.06, 999, 999);
+  o2::base::Detector::Medium(39, "ERGDUOCEL$", 33, 0, ifield, fieldm, tmaxfdSi, stemaxSi, deemaxSi, epsilSi, stminSi);
+
+  // Impregnated carbon fleece
+  // (as educated guess we assume 50% carbon fleece 50% Araldite glue)
+  o2::base::Detector::Material(40, "IMPREG_FLEECE$", 12.0107, 6, 0.5 * (dAraldite + 0.4), 999, 999);
+  o2::base::Detector::Medium(40, "IMPREG_FLEECE$", 34, 0, ifield, fieldm, tmaxfdSi, stemaxSi, deemaxSi, epsilSi, stminSi);
 }
 
 void Detector::EndOfEvent() { Reset(); }
@@ -873,10 +890,10 @@ void Detector::constructDetectorGeometry()
     if (j < mNumberInnerLayers) {
       TString detName = GetName();
       if (detName == "ITS") {
-        mGeometry[j] = dynamic_cast<DescriptorInnerBarrelITS2*>(mDescriptorIB.get())->createLayer(j, wrapVols[0]); // define IB layers on first wrapper volume always
+        mGeometry[j] = ((DescriptorInnerBarrelITS2*)mDescriptorIB.get())->createLayer(j, wrapVols[0]); // define IB layers on first wrapper volume always
       } else if (detName == "IT3") {
 #ifdef ENABLE_UPGRADES
-        dynamic_cast<DescriptorInnerBarrelITS3*>(mDescriptorIB.get())->createLayer(j, wrapVols[0]); // define IB layers on first wrapper volume always
+        ((DescriptorInnerBarrelITS3*)mDescriptorIB.get())->createLayer(j, wrapVols[0]); // define IB layers on first wrapper volume always
 #endif
       }
       mWrapperLayerId[j] = 0;
@@ -926,7 +943,7 @@ void Detector::constructDetectorGeometry()
   // Now create the services
   TString detName = GetName();
   if (detName == "ITS") {
-    dynamic_cast<DescriptorInnerBarrelITS2*>(mDescriptorIB.get())->createServices(wrapVols[0]);
+    ((DescriptorInnerBarrelITS2*)mDescriptorIB.get())->createServices(wrapVols[0]);
   }
 
   mServicesGeometry = new V3Services(detName);
@@ -1043,7 +1060,7 @@ void Detector::addAlignableVolumes() const
   for (Int_t lr = 0; lr < mNumberLayers; lr++) {
     if (lr < mNumberInnerLayers) {
       if (detName == "ITS") {
-        dynamic_cast<DescriptorInnerBarrelITS2*>(mDescriptorIB.get())->addAlignableVolumesLayer(lr, mWrapperLayerId[lr], path, lastUID);
+        ((DescriptorInnerBarrelITS2*)mDescriptorIB.get())->addAlignableVolumesLayer(lr, mWrapperLayerId[lr], path, lastUID);
       }
     } else {
       addAlignableVolumesLayer(lr, path, lastUID);

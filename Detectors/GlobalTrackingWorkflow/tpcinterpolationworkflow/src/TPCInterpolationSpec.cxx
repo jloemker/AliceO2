@@ -12,6 +12,7 @@
 /// @file  TPCInterpolationSpec.cxx
 
 #include <vector>
+#include <unordered_map>
 
 #include "DataFormatsITS/TrackITS.h"
 #include "ReconstructionDataFormats/TrackTPCITS.h"
@@ -53,18 +54,22 @@ void TPCInterpolationDPL::init(InitContext& ic)
 void TPCInterpolationDPL::updateTimeDependentParams(ProcessingContext& pc)
 {
   o2::base::GRPGeomHelper::instance().checkUpdates(pc);
-  o2::tpc::VDriftHelper::extractCCDBInputs(pc);
+  mTPCVDriftHelper.extractCCDBInputs(pc);
   static bool initOnceDone = false;
   if (!initOnceDone) { // this params need to be queried only once
     initOnceDone = true;
     // other init-once stuff
     mInterpolation.init();
     int nTfs = mSlotLength / (o2::base::GRPGeomHelper::getNHBFPerTF() * o2::constants::lhc::LHCOrbitMUS * 1e-6);
-    int nTracksPerTfMax = (nTfs > 0) ? SpacePointsCalibConfParam::Instance().maxTracksPerCalibSlot / nTfs : -1;
-    if (nTracksPerTfMax >= 0) {
-      LOGP(info, "We will stop processing tracks after validating {} tracks per TF", nTracksPerTfMax);
-    } else {
+    bool limitTracks = (SpacePointsCalibConfParam::Instance().maxTracksPerCalibSlot < 0) ? true : false;
+    int nTracksPerTfMax = (nTfs > 0 && !limitTracks) ? SpacePointsCalibConfParam::Instance().maxTracksPerCalibSlot / nTfs : -1;
+    if (nTracksPerTfMax > 0) {
+      LOGP(info, "We will stop processing tracks after validating {} tracks per TF, since we want to accumulate {} tracks for a slot with {} TFs",
+           nTracksPerTfMax, SpacePointsCalibConfParam::Instance().maxTracksPerCalibSlot, nTfs);
+    } else if (nTracksPerTfMax < 0) {
       LOG(info) << "The number of processed tracks per TF is not limited";
+    } else {
+      LOG(error) << "No tracks will be processed. maxTracksPerCalibSlot must be greater than slot length in TFs";
     }
     mInterpolation.setMaxTracksPerTF(nTracksPerTfMax);
   }
@@ -101,9 +106,16 @@ void TPCInterpolationDPL::run(ProcessingContext& pc)
   std::vector<o2::track::TrackParCov> seeds;
   std::vector<float> trkTimes;
   std::vector<GTrackID> gids;
+  std::unordered_map<int, int> trkCounters;
+  // make sure the map has entries for every possible track input type
+  trkCounters.insert(std::make_pair<int, int>(GTrackID::Source::ITSTPCTRDTOF, 0));
+  trkCounters.insert(std::make_pair<int, int>(GTrackID::Source::ITSTPCTRD, 0));
+  trkCounters.insert(std::make_pair<int, int>(GTrackID::Source::ITSTPCTOF, 0));
+  trkCounters.insert(std::make_pair<int, int>(GTrackID::Source::ITSTPC, 0));
+
   bool processITSTPConly = mProcessITSTPConly; // so that the flag can be used inside the lambda
   // the creator goes from most complete track (ITS-TPC-TRD-TOF) to least complete one (ITS-TPC)
-  auto creator = [&gidTables, &seeds, &trkTimes, &recoData, &processITSTPConly, &gids, &param](auto& _tr, GTrackID _origID, float t0, float tErr) {
+  auto creator = [&gidTables, &seeds, &trkTimes, &recoData, &processITSTPConly, &gids, &param, &trkCounters](auto& _tr, GTrackID _origID, float t0, float tErr) {
     if constexpr (std::is_base_of_v<o2::track::TrackParCov, std::decay_t<decltype(_tr)>>) {
       bool trackGood = true;
       bool hasOuterPoint = false;
@@ -112,7 +124,16 @@ void TPCInterpolationDPL::run(ProcessingContext& pc)
         // ITS and TPC track is always needed. At this stage ITS afterburner tracks are also rejected
         return true;
       }
-      if (gidTable[GTrackID::TRD].isIndexSet() || gidTable[GTrackID::TOF].isIndexSet()) {
+      if (gidTable[GTrackID::TRD].isIndexSet()) {
+        // TRD specific cuts
+        const auto& trdTrk = recoData.getITSTPCTRDTrack<o2::trd::TrackTRD>(gidTable[GTrackID::ITSTPCTRD]);
+        if (trdTrk.getNtracklets() < param.minTRDNTrklts) {
+          trackGood = false;
+        }
+        hasOuterPoint = true;
+      }
+      if (gidTable[GTrackID::TOF].isIndexSet()) {
+        // TOF specific cuts (if any)
         hasOuterPoint = true;
       }
       const auto itstpcTrk = &recoData.getTPCITSTrack(gidTable[GTrackID::ITSTPC]);
@@ -131,6 +152,9 @@ void TPCInterpolationDPL::run(ProcessingContext& pc)
         if (itsTrk->getNumberOfClusters() < param.minITSNClsNoOuterPoint || tpcTrk->getNClusterReferences() < param.minTPCNClsNoOuterPoint) {
           trackGood = false;
         }
+        if (itsTrk->getPt() < param.minPtNoOuterPoint) {
+          trackGood = false;
+        }
       } else {
         if (itsTrk->getNumberOfClusters() < param.minITSNCls || tpcTrk->getNClusterReferences() < param.minTPCNCls) {
           trackGood = false;
@@ -141,21 +165,30 @@ void TPCInterpolationDPL::run(ProcessingContext& pc)
         seeds.emplace_back(itsTrk->getParamOut()); // FIXME: should this not be a refit of the ITS track?
         gidTables.emplace_back(gidTable);
         gids.push_back(_origID);
+        trkCounters[_origID.getSource()] += 1;
       }
-      return true;
+      if (gidTable[GTrackID::TRD].isIndexSet() && gidTable[GTrackID::TOF].isIndexSet()) {
+        // for ITS-TPC-TRD-TOF tracks we are interested also in the ITS-TPC-TRD part
+        // we want to have both available, so return false for the full barrell tracks
+        return false;
+      } else {
+        return true;
+      }
     } else {
       return false;
     }
   };
   recoData.createTracksVariadic(creator); // create track sample considered for interpolation
-  LOG(info) << "Created " << seeds.size() << " seeds.";
+  LOGP(info, "Created {} seeds. {} ITS-TPC-TRD-TOF, {} ITS-TPC-TRD, {} ITS-TPC-TOF, {} ITS-TPC",
+       seeds.size(), trkCounters.at(GTrackID::Source::ITSTPCTRDTOF), trkCounters.at(GTrackID::Source::ITSTPCTRD),
+       trkCounters.at(GTrackID::Source::ITSTPCTOF), trkCounters.at(GTrackID::Source::ITSTPC));
 
   if (mUseMC) {
     // possibly MC labels will be used to check filtering procedure performance before interpolation
     // not yet implemented
   }
 
-  mInterpolation.process(recoData, gids, gidTables, seeds, trkTimes);
+  mInterpolation.process(recoData, gids, gidTables, seeds, trkTimes, trkCounters);
   mTimer.Stop();
   LOGF(info, "TPC interpolation timing: Cpu: %.3e Real: %.3e s", mTimer.CpuTime(), mTimer.RealTime());
 

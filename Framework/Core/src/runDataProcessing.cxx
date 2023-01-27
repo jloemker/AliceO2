@@ -8,6 +8,7 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
+#define BOOST_BIND_GLOBAL_PLACEHOLDERS
 #include <stdexcept>
 #include "Framework/BoostOptionsRetriever.h"
 #include "Framework/CallbacksPolicy.h"
@@ -688,7 +689,7 @@ void handle_crash(int sig)
   int size = backtrace(array, 1024);
 
   {
-    char const* msg = "*** Program crashed (Segmentation fault, FPE, BUS, ABRT, KILL)\nBacktrace by DPL:\n";
+    char const* msg = "*** Program crashed (Segmentation fault, FPE, BUS, ABRT, KILL, Unhandled Exception, ...)\nBacktrace by DPL:\n";
     auto retVal = write(STDERR_FILENO, msg, strlen(msg));
     msg = "UNKNOWN SIGNAL\n";
     if (sig == SIGSEGV) {

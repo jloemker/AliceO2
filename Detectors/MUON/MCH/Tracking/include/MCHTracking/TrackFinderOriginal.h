@@ -17,7 +17,11 @@
 #ifndef O2_MCH_TRACKFINDERORIGINAL_H_
 #define O2_MCH_TRACKFINDERORIGINAL_H_
 
+#include <array>
 #include <chrono>
+#include <list>
+
+#include <gsl/span>
 
 #include "DataFormatsMCH/Cluster.h"
 #include "MCHTracking/Track.h"
@@ -40,8 +44,10 @@ class TrackFinderOriginal
   TrackFinderOriginal(TrackFinderOriginal&&) = delete;
   TrackFinderOriginal& operator=(TrackFinderOriginal&&) = delete;
 
-  void init(float l3Current, float dipoleCurrent);
-  const std::list<Track>& findTracks(const std::array<std::list<const Cluster*>, 10>& clusters);
+  void init();
+  void initField(float l3Current, float dipoleCurrent);
+
+  const std::list<Track>& findTracks(gsl::span<const Cluster> clusters);
 
   /// set the debug level defining the verbosity
   void debug(int debugLevel) { mDebugLevel = debugLevel; }
@@ -92,7 +98,7 @@ class TrackFinderOriginal
 
   TrackFitter mTrackFitter{}; /// track fitter
 
-  const std::array<std::list<const Cluster*>, 10>* mClusters = nullptr; ///< pointer to the lists of clusters
+  std::array<std::list<const Cluster*>, 10> mClusters{}; ///< lists of clusters per chamber
 
   std::list<Track> mTracks{}; ///< list of reconstructed tracks
 

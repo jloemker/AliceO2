@@ -221,6 +221,9 @@ int ReadConfiguration(int argc, char** argv)
   if (configStandalone.QA.inputHistogramsOnly) {
     configStandalone.rundEdx = false;
   }
+  if (configStandalone.QA.dumpToROOT) {
+    configStandalone.proc.outputSharedClusterMap = true;
+  }
   if (configStandalone.eventDisplay) {
     configStandalone.noprompt = 1;
   }
@@ -377,7 +380,16 @@ int SetupReconstruction()
     steps.steps.setBits(GPUDataTypes::RecoStep::TRDTracking, false);
   }
   steps.inputs.set(GPUDataTypes::InOutType::TPCClusters, GPUDataTypes::InOutType::TRDTracklets);
-  if (grp.needsClusterer) {
+  steps.steps.setBits(GPUDataTypes::RecoStep::TPCDecompression, false);
+  steps.inputs.setBits(GPUDataTypes::InOutType::TPCCompressedClusters, false);
+  if (grp.doCompClusterDecode) {
+    steps.inputs.setBits(GPUDataTypes::InOutType::TPCCompressedClusters, true);
+    steps.inputs.setBits(GPUDataTypes::InOutType::TPCClusters, false);
+    steps.steps.setBits(GPUDataTypes::RecoStep::TPCCompression, false);
+    steps.steps.setBits(GPUDataTypes::RecoStep::TPCClusterFinding, false);
+    steps.steps.setBits(GPUDataTypes::RecoStep::TPCDecompression, true);
+    steps.outputs.setBits(GPUDataTypes::InOutType::TPCCompressedClusters, false);
+  } else if (grp.needsClusterer) {
     steps.inputs.setBits(GPUDataTypes::InOutType::TPCRaw, true);
     steps.inputs.setBits(GPUDataTypes::InOutType::TPCClusters, false);
   } else {
@@ -397,8 +409,6 @@ int SetupReconstruction()
   steps.outputs.setBits(GPUDataTypes::InOutType::TPCCompressedClusters, steps.steps.isSet(GPUDataTypes::RecoStep::TPCCompression));
   steps.outputs.setBits(GPUDataTypes::InOutType::TRDTracks, steps.steps.isSet(GPUDataTypes::RecoStep::TRDTracking));
   steps.outputs.setBits(GPUDataTypes::InOutType::TPCClusters, steps.steps.isSet(GPUDataTypes::RecoStep::TPCClusterFinding));
-  steps.steps.setBits(GPUDataTypes::RecoStep::TPCDecompression, false);
-  steps.inputs.setBits(GPUDataTypes::InOutType::TPCCompressedClusters, false);
 
   if (steps.steps.isSet(GPUDataTypes::RecoStep::TRDTracking)) {
     if (recSet.tpc.nWays > 1) {
@@ -561,7 +571,7 @@ int LoadEvent(int iEvent, int x)
     }
   }
 
-  if (!rec->GetParam().par.earlyTpcTransform && chainTracking->mIOPtrs.clustersNative == nullptr && chainTracking->mIOPtrs.tpcPackedDigits == nullptr && chainTracking->mIOPtrs.tpcZS == nullptr) {
+  if (!rec->GetParam().par.earlyTpcTransform && !chainTracking->mIOPtrs.clustersNative && !chainTracking->mIOPtrs.tpcPackedDigits && !chainTracking->mIOPtrs.tpcZS && !chainTracking->mIOPtrs.tpcCompressedClusters) {
     printf("Need cluster native data for on-the-fly TPC transform\n");
     return 1;
   }
